@@ -23,12 +23,29 @@ export type SectionReport = Section & {
   reason: string;
 };
 
+export type CurveSource =
+  | "screenshot"
+  | "csv"
+  | "video"
+  | "example";
+
 export type Breakdown = {
   duration: number;
   example: boolean;
+  curveSource: CurveSource;
+  curveLabel: string;
   sections: SectionReport[];
   score: number;
   topFixes: string[];
+};
+
+export type ReasonHints = {
+  cutInFirst15: boolean;
+  firstWordAt: number | null;
+  hookCue: boolean;
+  ctaCue: boolean;
+  payoffBefore75: boolean;
+  skipRate: number | null;
 };
 
 export const EXAMPLE_DURATION = 42;
@@ -57,22 +74,6 @@ export function round1(n: number): number {
 
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
-}
-
-export function defaultTimes(duration: number): number[] {
-  const d = Math.max(1, duration);
-  const times = new Set<number>([0, d]);
-  if (d >= 1) times.add(1);
-  if (d >= 3) times.add(3);
-  for (let pct = 10; pct <= 90; pct += 10) {
-    const t = round1((d * pct) / 100);
-    if (t > 0 && t < d) times.add(t);
-  }
-  return [...times].sort((a, b) => a - b);
-}
-
-export function defaultPoints(duration: number): Point[] {
-  return defaultTimes(duration).map((t) => ({ t, p: t === 0 ? 100 : 80 }));
 }
 
 export function interpolate(points: Point[], t: number): number {
@@ -104,38 +105,6 @@ export function maxDropInWindow(points: Point[], start: number, end: number, win
   return max;
 }
 
-export function autoSections(duration: number): Section[] {
-  const d = Math.max(1, duration);
-  const hookEnd = Math.min(3, round1(d * 0.12));
-  const setupEnd = round1(Math.max(hookEnd + 0.5, d * 0.2));
-  const payoffStart = round1(Math.min(d * 0.9 - 0.5, Math.max(setupEnd + 1, d * 0.7)));
-  const ctaStart = round1(Math.min(d - 0.4, Math.max(payoffStart + 0.5, d * 0.9)));
-  const bodyStart = setupEnd;
-  const bodyEnd = payoffStart;
-  const beats = d >= 28 ? 3 : 2;
-  const bodySpan = Math.max(0.5, bodyEnd - bodyStart);
-  const body: Section[] = [];
-  for (let i = 0; i < beats; i++) {
-    const start = round1(bodyStart + (bodySpan * i) / beats);
-    const end = i === beats - 1 ? bodyEnd : round1(bodyStart + (bodySpan * (i + 1)) / beats);
-    body.push({
-      id: `body-${i + 1}`,
-      kind: "body",
-      name: beats === 1 ? "BODY" : `BODY ${i + 1}`,
-      start,
-      end,
-      note: "",
-    });
-  }
-  return [
-    { id: "hook", kind: "hook", name: "HOOK", start: 0, end: hookEnd, note: "" },
-    { id: "setup", kind: "setup", name: "SETUP", start: hookEnd, end: setupEnd, note: "" },
-    ...body,
-    { id: "payoff", kind: "payoff", name: "PAYOFF", start: payoffStart, end: ctaStart, note: "" },
-    { id: "cta", kind: "cta", name: "CTA", start: ctaStart, end: d, note: "" },
-  ];
-}
-
 function verdictFor(kind: SectionKind, inPct: number, outPct: number, lostShare: number, max2s: number): Verdict {
   if (kind !== "hook" && max2s >= 12) return "CLIFF";
   if (kind === "hook" && outPct < 60) return "WEAK";
@@ -153,9 +122,7 @@ function comboFor(section: Section, verdict: Verdict, hookVerdict: Verdict, inPc
   if (section.kind === "cta" && (verdict === "WEAK" || inPct < 25)) return "CTA — MISSED";
   if (section.kind === "cta" && verdict === "CLIFF") return "CTA — CLIFF";
   if (section.kind === "payoff" && (verdict === "WEAK" || verdict === "CLIFF")) {
-    return hookVerdict === "STRONG" || hookVerdict === "OK"
-      ? "HOOK GOOD, PAYOFF WEAK"
-      : "PAYOFF — WEAK";
+    return hookVerdict === "STRONG" || hookVerdict === "OK" ? "HOOK GOOD, PAYOFF WEAK" : "PAYOFF — WEAK";
   }
   if (section.kind === "body" && verdict === "CLIFF") return `${section.name} — CLIFF`;
   if (section.kind === "body" && verdict === "WEAK") return "PACING DROPPED";
@@ -172,37 +139,37 @@ function reasonFor(
   inPct: number,
   outPct: number,
   max2s: number,
+  hints: ReasonHints | undefined,
 ): string {
-  const note = section.note.trim();
-  const noteBit = note ? ` You marked this as “${note}”.` : "";
   if (section.kind === "hook" && verdict === "WEAK") {
-    return `${Math.round(100 - outPct)}% gone by ${formatTime(section.end)}. Open on the result, not the intro.${noteBit}`;
+    if (hints && !hints.cutInFirst15) return `${Math.round(100 - outPct)}% gone by 3s. Cut in the first 1.5s.`;
+    return `${Math.round(100 - outPct)}% gone by 3s. Open on the result.`;
   }
   if (section.kind === "hook" && verdict === "STRONG") {
-    return `Held ${Math.round(outPct)}% through ${formatTime(section.end)}. Keep that first frame.${noteBit}`;
+    return `Held ${Math.round(outPct)}% through ${formatTime(section.end)}.`;
   }
   if (section.kind === "hook") {
-    return `Hook is fine, not great. Tighten the first 3s so the result is on screen.${noteBit}`;
+    if (hints?.firstWordAt != null && hints.firstWordAt > 2.5) return `First word at ${formatTime(hints.firstWordAt)}. Talk sooner.`;
+    return `Tighten the first 3s.`;
   }
   if (section.kind === "cta" && (verdict === "WEAK" || inPct < 25)) {
-    return `Only ${Math.round(inPct)}% saw it. Move it before the 75% mark.${noteBit}`;
+    return `Only ${Math.round(inPct)}% saw it. Move it before 75%.`;
   }
   if (verdict === "CLIFF") {
-    return `${Math.round(max2s)}% dropped in ~2s at ${formatTime(section.start)}–${formatTime(section.end)}. Cut dead air or jump the beat.${noteBit}`;
+    return `${Math.round(max2s)}% dropped in ~2s. Cut dead air.`;
   }
   if (section.kind === "payoff" && (verdict === "WEAK" || verdict === "CLIFF")) {
-    return `Held then lost them before the reveal. Deliver the payoff sooner.${noteBit}`;
+    if (hints && !hints.payoffBefore75) return `Payoff lands late. Deliver it before 75%.`;
+    return `Lost them before the reveal. Hit the payoff sooner.`;
   }
   if (section.kind === "body" && verdict === "WEAK") {
-    return `Steady bleed ${formatTime(section.start)}–${formatTime(section.end)}. Cut or add a pattern interrupt.${noteBit}`;
+    return `Steady bleed ${formatTime(section.start)}–${formatTime(section.end)}. Cut or interrupt.`;
   }
   if (section.kind === "setup" && (verdict === "WEAK" || verdict === "CLIFF")) {
-    return `People leave before the promise. Make setup one beat.${noteBit}`;
+    return `People leave before the promise. One-beat setup.`;
   }
-  if (verdict === "STRONG") {
-    return `Held ${Math.round(outPct)}% through this beat. Don’t stretch it.${noteBit}`;
-  }
-  return `${Math.round(lost)} pts lost. Keep this beat moving.${noteBit}`;
+  if (verdict === "STRONG") return `Held ${Math.round(outPct)}%. Don’t stretch it.`;
+  return `${Math.round(lost)} pts lost. Keep it moving.`;
 }
 
 export function formatTime(t: number): string {
@@ -210,7 +177,7 @@ export function formatTime(t: number): string {
   return `${Math.round(t)}s`;
 }
 
-export function analyzeSections(points: Point[], sections: Section[]): SectionReport[] {
+export function analyzeSections(points: Point[], sections: Section[], hints?: ReasonHints): SectionReport[] {
   let hookVerdict: Verdict = "OK";
   const reports: SectionReport[] = [];
   for (const section of sections) {
@@ -229,7 +196,7 @@ export function analyzeSections(points: Point[], sections: Section[]): SectionRe
       max2sDrop: max2s,
       verdict,
       combo: comboFor(section, verdict, hookVerdict, inPct),
-      reason: reasonFor(section, verdict, lost, inPct, outPct, max2s),
+      reason: reasonFor(section, verdict, lost, inPct, outPct, max2s, hints),
     });
   }
   return reports;
@@ -244,8 +211,7 @@ export function acceleratorScore(reports: SectionReport[], points: Point[], dura
   const cliffs = reports.filter((s) => s.verdict === "CLIFF").length;
   const cliffPts = Math.max(0, 18 - cliffs * 9);
   const avgLost =
-    reports.reduce((sum, s) => sum + (s.inPct > 1 ? s.lost / s.inPct : 0), 0) /
-    Math.max(1, reports.length);
+    reports.reduce((sum, s) => sum + (s.inPct > 1 ? s.lost / s.inPct : 0), 0) / Math.max(1, reports.length);
   const pacePts = clamp(1 - avgLost / 0.35, 0, 1) * 20;
   const ctaPts = clamp((cta?.inPct ?? 0) / 40, 0, 1) * 18;
   const endPts = clamp(end / 25, 0, 1) * 12;
@@ -261,11 +227,27 @@ export function topFixes(reports: SectionReport[]): string[] {
     .map((s) => `${s.combo}: ${s.reason}`);
 }
 
-export function buildBreakdown(points: Point[], sections: Section[], example: boolean, duration: number): Breakdown {
-  const reports = analyzeSections(points, sections);
+export function curveLabel(source: CurveSource, _example = false): string {
+  if (source === "screenshot") return "Curve: read from your screenshot";
+  if (source === "csv") return "Curve: estimated from avg watch time, upload your retention screenshot for exact";
+  if (source === "video") return "Curve: estimated from video pacing, upload a retention screenshot for exact";
+  return "Curve: example data";
+}
+
+export function buildBreakdown(
+  points: Point[],
+  sections: Section[],
+  example: boolean,
+  duration: number,
+  source: CurveSource = "example",
+  hints?: ReasonHints,
+): Breakdown {
+  const reports = analyzeSections(points, sections, hints);
   return {
     duration,
     example,
+    curveSource: source,
+    curveLabel: curveLabel(source, example),
     sections: reports,
     score: acceleratorScore(reports, points, duration),
     topFixes: topFixes(reports),
