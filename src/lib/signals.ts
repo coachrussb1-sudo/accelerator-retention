@@ -17,7 +17,7 @@ export type VideoSignals = {
 
 const HOOK_WORDS = /\b(wait|stop|watch|don't|dont|if you|secret|nobody|stop scrolling)\b/i;
 const PAYOFF_WORDS = /\b(here's|heres|that's why|thats why|the point|result|before|after|reveal|punchline)\b/i;
-const CTA_WORDS = /\b(link in bio|comment|dm me|d\.m|follow|save this|book|method|tap the)\b/i;
+const CTA_WORDS = /\b(link in bio|comment|dm me|dm|d\.m|follow|save this|book|method|tap the)\b/i;
 
 export function cuesFromTranscript(chunks: CueHit[]): Pick<VideoSignals, "hookCue" | "payoffCue" | "ctaCue" | "firstWordAt"> {
   const first = chunks.find((c) => c.text.trim().length > 0) ?? null;
@@ -65,7 +65,13 @@ export function peakCuts(samples: Energy[], minGap = 1.2, z = 1.6): number[] {
 
 export function splitSections(duration: number, signals?: VideoSignals | null): Section[] {
   const d = Math.max(3, duration);
-  const cuts = (signals?.cuts ?? []).filter((t) => t > 0.35 && t < d - 0.35);
+  const pauseStarts = (signals?.silences ?? [])
+    .filter((s) => s.end - s.start >= 0.6)
+    .map((s) => s.start);
+  const cuts = [...(signals?.cuts ?? []), ...pauseStarts]
+    .filter((t) => t > 0.35 && t < d - 0.35)
+    .sort((a, b) => a - b)
+    .filter((t, i, all) => i === 0 || t - all[i - 1] >= 0.45);
   const hookCut = cuts.find((t) => t >= 0.8 && t <= 3.2);
   const hookEnd = round1(hookCut ?? Math.min(3, d * 0.12));
 

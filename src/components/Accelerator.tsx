@@ -117,7 +117,6 @@ export function Accelerator() {
             >
               <span className="mb-3 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 text-cream">↑</span>
               <p className="text-[15px] font-semibold text-cream">{progress || "Drop the reel, screenshot, or CSV"}</p>
-              {!progress ? <p className="mt-1 text-[13px] text-muted">or click to choose</p> : null}
             </button>
             <input
               ref={inputRef}

@@ -21,9 +21,20 @@ export async function transcribeAudio(url: string, onProgress?: Progress): Promi
     });
     const result = await transcriber(url, { return_timestamps: true });
     onProgress?.(1);
-    const text = typeof result?.text === "string" ? result.text : "";
-    if (!text.trim()) return [];
-    return [{ t: 0.4, text }];
+    const chunks: CueHit[] = [];
+    const rawChunks = (result as { chunks?: Array<{ text?: string; timestamp?: [number, number] }> })?.chunks;
+    if (Array.isArray(rawChunks)) {
+      for (const chunk of rawChunks) {
+        const text = String(chunk.text ?? "").trim();
+        const t = Number(chunk.timestamp?.[0]);
+        if (text) chunks.push({ t: Number.isFinite(t) ? t : 0, text });
+      }
+    }
+    if (!chunks.length) {
+      const text = typeof result?.text === "string" ? result.text.trim() : "";
+      if (text) chunks.push({ t: 0.4, text });
+    }
+    return chunks;
   } catch {
     return null;
   }

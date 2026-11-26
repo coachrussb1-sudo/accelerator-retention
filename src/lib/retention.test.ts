@@ -60,6 +60,24 @@ describe("retention breakdown", () => {
     expect(interpolate(points, 3)).toBeGreaterThan(40);
   });
 
+  it("uses pauses as section boundaries when cuts are missing", () => {
+    const sections = splitSections(42, {
+      duration: 42,
+      cuts: [],
+      rms: [],
+      silences: [
+        { start: 1.4, end: 2.2 },
+        { start: 30.5, end: 31.4 },
+      ],
+      firstWordAt: 0.5,
+      hookCue: null,
+      payoffCue: null,
+      ctaCue: null,
+    });
+    expect(sections[0]?.end).toBe(1.4);
+    expect(sections.find((s) => s.kind === "payoff")?.start).toBeGreaterThan(20);
+  });
+
   it("splits sections from cut cues instead of only percents", () => {
     const sections = splitSections(42, {
       duration: 42,
