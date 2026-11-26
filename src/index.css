@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: Anton;
+  src: url("./assets/anton.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Inter;
+  src: url("./assets/inter.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@theme {
+  --font-display: "Anton", Impact, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #050505;
+  --color-lime: #78fa3d;
+  --color-cream: #f5f5f1;
+  --color-muted: #8a8a84;
+  --color-line: #1c1c1c;
+  --color-card: #0d0d0d;
+  --color-gold: #e8c547;
+  --color-rust: #e07a3d;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: #050505;
+  color: #f5f5f1;
+}
+
+body {
+  font-family: var(--font-sans);
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font-family: inherit;
+}
