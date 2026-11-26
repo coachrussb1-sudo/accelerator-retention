@@ -10,6 +10,7 @@ export type Pix = {
 export type TraceResult = {
   points: Point[];
   confidence: number;
+  box: { left: number; right: number; top: number; bottom: number };
 };
 
 function lum(data: Uint8Array, i: number): number {
@@ -78,7 +79,7 @@ export function traceRetention(image: Pix): TraceResult | null {
   }
 
   const confidence = hits.length / ys.length;
-  return { points: resampleTime(smoothed), confidence };
+  return { points: resampleTime(smoothed), confidence, box };
 }
 
 function findPlotBox(
@@ -113,7 +114,7 @@ function findPlotBox(
 
   const left = lineXs.length ? Math.min(...lineXs) : Math.round(width * 0.11);
   const right = lineXs.length ? Math.max(...lineXs) : Math.round(width * 0.95);
-  const maxLineY = lineXs.length ? Math.max(...lineYsSafe(data, width, height, bg, left, right)) : Math.round(height * 0.88);
+  const maxLineY = lineXs.length ? maxSeriesY(data, width, height, bg, left, right) : Math.round(height * 0.88);
   let top: number;
   let bottom: number;
   const grids = uniqueYs(gridYs);
@@ -123,7 +124,7 @@ function findPlotBox(
     const gap = median(gaps);
     bottom = grids[grids.length - 1];
     if (gap > 8 && maxLineY > bottom + gap * 0.35) {
-      bottom = Math.min(height - 2, bottom + gap);
+      bottom = Math.min(height - 2, Math.max(maxLineY, bottom + gap));
     }
   } else {
     top = Math.round(height * 0.15);
@@ -151,22 +152,22 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }
 
-function lineYsSafe(
+function maxSeriesY(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   bg: number,
   left: number,
   right: number,
-): number[] {
-  const ys: number[] = [];
+): number {
+  let maxY = 0;
   for (let x = left; x < right; x += 3) {
     for (let y = 0; y < height; y += 2) {
       const i = idx(width, x, y);
-      if (sat(data, i) > 0.2 && Math.abs(lum(data, i) - bg) > 12) ys.push(y);
+      if (sat(data, i) > 0.2 && Math.abs(lum(data, i) - bg) > 12 && y > maxY) maxY = y;
     }
   }
-  return ys.length ? ys : [Math.round(height * 0.88)];
+  return maxY || Math.round(height * 0.88);
 }
 
 function sampleBg(data: Uint8ClampedArray, width: number, height: number): number {
@@ -196,12 +197,20 @@ function pickY(
   bg: number,
   grid: Set<number>,
 ): { x: number; y: number } | null {
+  let bestY = -1;
+  let bestS = 0.2;
   for (let y = top; y < bottom; y++) {
     if (grid.has(y)) continue;
     const i = idx(width, x, y);
-    if (isSeries(data, i, bg)) return { x, y };
+    if (!isSeries(data, i, bg)) continue;
+    const S = sat(data, i);
+    if (S > bestS) {
+      bestS = S;
+      bestY = y;
+    }
   }
-  return null;
+  if (bestY < 0) return null;
+  return { x, y: bestY };
 }
 
 function smooth(points: Point[], radius: number): Point[] {
