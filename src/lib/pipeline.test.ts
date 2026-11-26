@@ -11,4 +11,14 @@ describe("auto pipeline", () => {
     expect(result.breakdown.sections.some((s) => s.kind === "hook")).toBe(true);
     expect(result.breakdown.score).toBeGreaterThan(0);
   });
+
+  it("still reads a Meta CSV plus screenshot when mime types are blank", async () => {
+    const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "" });
+    const csv = new File([EXAMPLE_CSV], "insights.csv", { type: "" });
+    const result = await runPipeline([image, csv]);
+    expect(result.error).toBeNull();
+    expect(result.csv?.kind).toBe("meta_business_suite");
+    expect(["screenshot", "csv"]).toContain(result.breakdown.curveSource);
+    expect(result.breakdown.duration).toBeGreaterThan(0);
+  });
 });

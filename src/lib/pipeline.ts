@@ -26,10 +26,36 @@ export type ProgressFn = (label: string) => void;
 
 function kindOf(file: File): "video" | "image" | "csv" | "other" {
   const name = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
+  const type = (file.type || "").toLowerCase();
   if (type.startsWith("video/") || /\.(mp4|mov|webm|m4v)$/.test(name)) return "video";
-  if (type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/.test(name)) return "image";
-  if (type.includes("csv") || name.endsWith(".csv") || name.endsWith(".txt")) return "csv";
+  if (type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/.test(name)) return "image";
+  if (
+    type.includes("csv") ||
+    type === "text/plain" ||
+    type === "text/tab-separated-values" ||
+    type.includes("excel") ||
+    /\.(csv|tsv|txt)$/.test(name)
+  ) {
+    return "csv";
+  }
+  return "other";
+}
+
+async function sniffKind(file: File): Promise<"video" | "image" | "csv" | "other"> {
+  const quick = kindOf(file);
+  if (quick !== "other") return quick;
+  try {
+    const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+    if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e) return "image";
+    if (head[0] === 0xff && head[1] === 0xd8) return "image";
+    if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46) return "image";
+    const sample = await file.slice(0, 480).text();
+    if (/,/.test(sample) && /(caption|duration|views|reach|watch time|impressions|skip rate)/i.test(sample)) {
+      return "csv";
+    }
+  } catch {
+    /* ignore */
+  }
   return "other";
 }
 
@@ -38,13 +64,18 @@ export async function runPipeline(files: File[], opts: { example?: boolean; onPr
   const example = Boolean(opts.example);
   onProgress("Reading…");
 
-  const videos = files.filter((f) => kindOf(f) === "video");
-  const images = files.filter((f) => kindOf(f) === "image");
-  const csvs = files.filter((f) => kindOf(f) === "csv");
+  const classified = await Promise.all(files.map(async (file) => ({ file, kind: await sniffKind(file) })));
+  const videos = classified.filter((item) => item.kind === "video").map((item) => item.file);
+  const images = classified.filter((item) => item.kind === "image").map((item) => item.file);
+  const csvs = classified.filter((item) => item.kind === "csv").map((item) => item.file);
 
   let csv: ParsedCsv | null = null;
   for (const file of csvs) {
-    csv = parseInsightsCsv(await file.text(), file.name);
+    try {
+      csv = parseInsightsCsv(await file.text(), file.name);
+    } catch {
+      /* skip unreadable CSV */
+    }
   }
 
   let videoUrl: string | null = null;
@@ -58,13 +89,20 @@ export async function runPipeline(files: File[], opts: { example?: boolean; onPr
     }
   }
 
-  const duration =
-    signals?.duration && Number.isFinite(signals.duration)
+  let duration =
+    signals?.duration && Number.isFinite(signals.duration) && signals.duration > 0
       ? signals.duration
-      : csv?.picked?.duration ?? (example ? EXAMPLE_DURATION : 0);
+      : csv?.picked?.duration && csv.picked.duration > 0
+        ? csv.picked.duration
+        : example
+          ? EXAMPLE_DURATION
+          : 0;
 
   if (csv) {
     csv = { ...csv, picked: pickRow(csv.rows, duration || null) };
+    if (!(duration > 0) && csv.picked?.duration && csv.picked.duration > 0) {
+      duration = csv.picked.duration;
+    }
   }
 
   let source: CurveSource = "video";
@@ -76,8 +114,8 @@ export async function runPipeline(files: File[], opts: { example?: boolean; onPr
       const pix = await imageDataFromBlob(images[0]);
       const traced = traceRetention(pix);
       if (traced && traced.points.length >= 8) {
-        const d = duration || EXAMPLE_DURATION;
-        points = pointsToDuration(traced.points, d);
+        if (!(duration > 0)) duration = EXAMPLE_DURATION;
+        points = pointsToDuration(traced.points, duration);
         source = "screenshot";
       }
     } catch {
@@ -91,16 +129,19 @@ export async function runPipeline(files: File[], opts: { example?: boolean; onPr
     if (d > 0 && (row?.avgWatch != null || row?.skipRate != null)) {
       points = estimateCurve(d, row.avgWatch, row.skipRate, signals?.rms ?? []);
       source = "csv";
+      if (!(duration > 0)) duration = d;
     } else if (d > 0 && signals) {
       points = estimateCurve(d, null, null, signals.rms);
       source = "video";
+      if (!(duration > 0)) duration = d;
     }
   }
 
-  if (!points || !duration) {
+  if (!points) {
     if (example) {
       points = EXAMPLE_POINTS;
       source = "screenshot";
+      if (!(duration > 0)) duration = EXAMPLE_DURATION;
     } else {
       return {
         breakdown: buildBreakdown(EXAMPLE_POINTS, splitSections(EXAMPLE_DURATION), false, EXAMPLE_DURATION, "video"),
@@ -112,7 +153,7 @@ export async function runPipeline(files: File[], opts: { example?: boolean; onPr
     }
   }
 
-  const d = duration || EXAMPLE_DURATION;
+  const d = duration > 0 ? duration : EXAMPLE_DURATION;
   const sections = splitSections(d, signals);
   const hints: ReasonHints = {
     cutInFirst15: (signals?.cuts ?? []).some((t) => t > 0.3 && t <= 1.5),
